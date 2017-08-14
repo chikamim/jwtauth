@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chikamim/jwtauth"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-chi/chi"
-	"github.com/go-chi/jwtauth"
 )
 
 var (
@@ -90,6 +90,9 @@ func TestMore(t *testing.T) {
 					case jwtauth.ErrExpired:
 						http.Error(w, "expired", 401)
 						return
+					case jwtauth.ErrNotBefore:
+						http.Error(w, "not active", 401)
+						return
 					case jwtauth.ErrUnauthorized:
 						http.Error(w, http.StatusText(401), 401)
 						return
@@ -156,8 +159,19 @@ func TestMore(t *testing.T) {
 		t.Fatalf(resp)
 	}
 
+	// verify expired token
 	h = newAuthHeader((jwtauth.Claims{}).Set("exp", jwtauth.EpochNow()-1000))
 	if status, resp := testRequest(t, ts, "GET", "/admin", h, nil); status != 401 || resp != "expired\n" {
+		t.Fatalf(resp)
+	}
+	// verify invalid not before token
+	h = newAuthHeader((jwtauth.Claims{}).Set("nbf", jwtauth.EpochNow()+1000))
+	if status, resp := testRequest(t, ts, "GET", "/admin", h, nil); status != 401 || resp != "not active\n" {
+		t.Fatalf(resp)
+	}
+	// verify active token between "nbf" and "exp"
+	h = newAuthHeader((jwtauth.Claims{"user_id": 31337}).Set("exp", jwtauth.EpochNow()+1000).Set("nbf", jwtauth.EpochNow()-1000))
+	if status, resp := testRequest(t, ts, "GET", "/admin", h, nil); status != 200 || resp != "protected, user:31337" {
 		t.Fatalf(resp)
 	}
 

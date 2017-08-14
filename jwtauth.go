@@ -19,6 +19,7 @@ var (
 var (
 	ErrUnauthorized = errors.New("jwtauth: token is unauthorized")
 	ErrExpired      = errors.New("jwtauth: token is expired")
+	ErrNotBefore    = errors.New("jwtauth: token is not active")
 )
 
 type JwtAuth struct {
@@ -124,8 +125,10 @@ func VerifyRequest(ja *JwtAuth, r *http.Request, paramAliases ...string) (*jwt.T
 	token, err := ja.Decode(tokenStr)
 	if err != nil {
 		switch err.Error() {
-		case "token is expired":
+		case ErrExpired.Error():
 			err = ErrExpired
+		case ErrNotBefore.Error():
+			err = ErrNotBefore
 		}
 		return token, err
 	}
@@ -135,9 +138,18 @@ func VerifyRequest(ja *JwtAuth, r *http.Request, paramAliases ...string) (*jwt.T
 		return token, err
 	}
 
-	// Check expiry via "exp" claim
-	if IsExpired(token) {
-		err = ErrExpired
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return token, errors.New("jwtauth: expecting jwt.MapClaims")
+	}
+
+	err = VerifyExpired(claims)
+	if err != nil {
+		return token, err
+	}
+
+	err = VerifyNotBefore(claims)
+	if err != nil {
 		return token, err
 	}
 
@@ -221,30 +233,24 @@ func FromContext(ctx context.Context) (*jwt.Token, Claims, error) {
 	return token, claims, err
 }
 
-func IsExpired(t *jwt.Token) bool {
-	claims, ok := t.Claims.(jwt.MapClaims)
-	if !ok {
-		panic("jwtauth: expecting jwt.MapClaims")
-	}
-
+func VerifyExpired(claims jwt.MapClaims) error {
 	if expv, ok := claims["exp"]; ok {
-		var exp int64
-		switch v := expv.(type) {
-		case float64:
-			exp = int64(v)
-		case int64:
-			exp = v
-		case json.Number:
-			exp, _ = v.Int64()
-		default:
-		}
-
+		exp := interfaceToInt64(expv)
 		if exp < EpochNow() {
-			return true
+			return ErrExpired
 		}
 	}
+	return nil
+}
 
-	return false
+func VerifyNotBefore(claims jwt.MapClaims) error {
+	if nbfv, ok := claims["nbf"]; ok {
+		nbf := interfaceToInt64(nbfv)
+		if nbf > EpochNow() {
+			return ErrNotBefore
+		}
+	}
+	return nil
 }
 
 // Claims is a convenience type to manage a JWT claims hash.
@@ -311,4 +317,17 @@ type contextKey struct {
 
 func (k *contextKey) String() string {
 	return "jwtauth context value " + k.name
+}
+
+func interfaceToInt64(i interface{}) int64 {
+	var v int64
+	switch f := i.(type) {
+	case float64:
+		v = int64(f)
+	case int64:
+		v = f
+	case json.Number:
+		v, _ = f.Int64()
+	}
+	return v
 }
